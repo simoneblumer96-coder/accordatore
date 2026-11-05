@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accordatore Minimale & Esecutore Note</title>
+  <style>
+    :root {
+      --bg-color: #121214;
+      --card-bg: #1e1e24;
+      --accent: #00e676;
+      --accent-warn: #ffab00;
+      --accent-off: #ff3d00;
+      --text: #ffffff;
+      --subtext: #a0a0a0;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { background: var(--bg-color); color: var(--text); padding: 1rem; display: flex; justify-content: center; min-height: 100vh; }
+    .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 1rem; }
+    
+    h1 { text-align: center; color: var(--accent); font-size: 1.3rem; letter-spacing: 1px; }
+
+    .card { background: var(--card-bg); border-radius: 16px; padding: 1.2rem; display: flex; flex-direction: column; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .card-title { font-size: 0.85rem; color: var(--subtext); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.8rem; width: 100%; text-align: left; }
+
+    /* Riferimento LA (A4) */
+    .a4-config { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 0.5rem; background: #151518; padding: 0.6rem 0.8rem; border-radius: 10px; }
+    .a4-config label { font-size: 0.9rem; color: var(--subtext); }
+    .a4-config input { background: #2a2a32; border: 1px solid #444; color: var(--accent); font-weight: bold; font-size: 1rem; width: 70px; text-align: center; border-radius: 6px; padding: 0.2rem; }
+
+    /* Visualizzazione Nota e Hz */
+    .note-display { font-size: 3.5rem; font-weight: 800; color: var(--accent); margin: 0.2rem 0; text-align: center; line-height: 1; }
+    .hz-display { font-size: 1.1rem; color: var(--text); font-weight: 600; margin-bottom: 0.4rem; }
+    .natural-note { font-size: 0.85rem; color: var(--subtext); margin-bottom: 1rem; }
+    .natural-note span { color: #fff; font-weight: bold; }
+
+    /* Cursore Accordatore */
+    .gauge-container { width: 100%; position: relative; margin: 0.8rem 0; }
+    .gauge-bar { width: 100%; height: 12px; background: #2a2a32; border-radius: 6px; position: relative; overflow: hidden; }
+    .gauge-center-mark { position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; background: var(--accent); transform: translateX(-50%); z-index: 2; }
+    .gauge-needle { position: absolute; top: 0; bottom: 0; width: 6px; background: #ffffff; border-radius: 3px; transform: translateX(-50%); transition: left 0.1s ease-out, background 0.1s; z-index: 3; }
+    .gauge-labels { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--subtext); margin-top: 0.4rem; }
+
+    .status-text { font-size: 1rem; font-weight: bold; margin-top: 0.4rem; text-transform: uppercase; letter-spacing: 1px; min-height: 1.4rem; }
+
+    .btn { width: 100%; padding: 0.85rem; border-radius: 12px; border: none; background: var(--accent); color: #000; font-weight: bold; font-size: 1rem; cursor: pointer; touch-action: manipulation; }
+    .btn-stop { background: var(--accent-off) !important; color: #fff; }
+
+    /* Esecutore Note MIDI */
+    .section-subtitle { font-size: 0.8rem; color: var(--subtext); width: 100%; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600; }
+    .midi-grid-6 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; width: 100%; }
+    .midi-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; width: 100%; }
+    .note-btn { background: #2a2a32; border: 1px solid #3a3a44; color: var(--text); padding: 0.65rem 0.2rem; border-radius: 10px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-align: center; }
+    .note-btn.active { background: var(--accent) !important; color: #000 !important; }
+    
+    .custom-tone { display: flex; gap: 0.5rem; width: 100%; margin-top: 1rem; }
+    .custom-tone select { flex: 1; background: #2a2a32; border: 1px solid #444; color: #fff; padding: 0.6rem; border-radius: 8px; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h1>ACCORDATORE MINIMALE</h1>
+
+    <!-- Impostazione Frequenza LA4 -->
+    <div class="a4-config">
+      <label for="a4Input">Riferimento LA4 (Hz):</label>
+      <input type="number" id="a4Input" value="440" min="415" max="466" onchange="updateA4()">
+    </div>
+
+    <!-- Sezione Accordatore -->
+    <div class="card">
+      <div id="noteDisplay" class="note-display">--</div>
+      <div id="hzDisplay" class="hz-display">0.0 Hz</div>
+      <div id="naturalDisplay" class="natural-note">Nota naturale più vicina: <span>--</span></div>
+
+      <!-- Cursore Visivo -->
+      <div class="gauge-container">
+        <div class="gauge-bar">
+          <div class="gauge-center-mark"></div>
+          <div id="needle" class="gauge-needle" style="left: 50%;"></div>
+        </div>
+        <div class="gauge-labels">
+          <span>CALANTE (-50c)</span>
+          <span>INTONATO</span>
+          <span>CRESCENTE (+50c)</span>
+        </div>
+      </div>
+
+      <div id="statusText" class="status-text" style="color: var(--subtext);">Inattivo</div>
+
+      <button id="micBtn" class="btn" style="margin-top:1rem;" onclick="toggleTuner()">Avvia Ascolto</button>
+    </div>
+
+    <!-- Sezione Esecutore Note MIDI -->
+    <div class="card">
+      <div class="card-title">Esecutore Note MIDI (Generatore Suoni)</div>
+      
+      <!-- Corde Chitarra -->
+      <div class="section-subtitle">🎸 Chitarra Standard:</div>
+      <div class="midi-grid-6">
+        <button class="note-btn" onclick="playToneNote('MI2')">MI2 (E2)</button>
+        <button class="note-btn" onclick="playToneNote('LA2')">LA2 (A2)</button>
+        <button class="note-btn" onclick="playToneNote('RE3')">RE3 (D3)</button>
+        <button class="note-btn" onclick="playToneNote('SOL3')">SOL3 (G3)</button>
+        <button class="note-btn" onclick="playToneNote('SI3')">SI3 (B3)</button>
+        <button class="note-btn" onclick="playToneNote('MI4')">MI4 (E4)</button>
+      </div>
+
+      <!-- Corde Violino -->
+      <div class="section-subtitle">🎻 Violino Standard:</div>
+      <div class="midi-grid-4">
+        <button class="note-btn" onclick="playToneNote('SOL3')">SOL3 (G3)</button>
+        <button class="note-btn" onclick="playToneNote('RE4')">RE4 (D4)</button>
+        <button class="note-btn" onclick="playToneNote('LA4')">LA4 (A4)</button>
+        <button class="note-btn" onclick="playToneNote('MI5')">MI5 (E5)</button>
+      </div>
+
+      <!-- Selettore Generico Note Cromatiche -->
+      <div class="custom-tone">
+        <select id="noteSelect">
+          <option value="DO">DO (C)</option>
+          <option value="DO#">DO# (C#)</option>
+          <option value="RE">RE (D)</option>
+          <option value="RE#">RE# (D#)</option>
+          <option value="MI">MI (E)</option>
+          <option value="FA">FA (F)</option>
+          <option value="FA#">FA# (F#)</option>
+          <option value="SOL">SOL (G)</option>
+          <option value="SOL#">SOL# (G#)</option>
+          <option value="LA" selected>LA (A)</option>
+          <option value="LA#">LA# (A#)</option>
+          <option value="SI">SI (B)</option>
+        </select>
+        
+        <select id="octaveSelect">
+          <option value="2">Ottava 2</option>
+          <option value="3">Ottava 3</option>
+          <option value="4" selected>Ottava 4</option>
+          <option value="5">Ottava 5</option>
+        </select>
+
+        <button class="btn" style="width: auto; padding: 0.6rem 1.2rem;" onclick="playSelectedTone()">Suona</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let audioCtx = null;
+    let analyser = null;
+    let micStream = null;
+    let isListening = false;
+    let activeOscillator = null;
+    let activeGainNode = null;
+
+    let A4 = 440;
+    const noteNamesITA = ["DO", "DO#", "RE", "RE#", "MI", "FA", "FA#", "SOL", "SOL#", "LA", "LA#", "SI"];
+    const naturalMidiClasses = [0, 2, 4, 5, 7, 9, 11];
+
+    function updateA4() {
+      const val = parseFloat(document.getElementById('a4Input').value);
+      if (val >= 400 && val <= 480) {
+        A4 = val;
+      }
+    }
+
+    async function toggleTuner() {
+      const btn = document.getElementById('micBtn');
+      if (isListening) {
+        isListening = false;
+        if (micStream) micStream.getTracks().forEach(t => t.stop());
+        btn.innerText = "Avvia Ascolto";
+        btn.classList.remove('btn-stop');
+        resetDisplay();
+        return;
+      }
+
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+
+        const source = audioCtx.createMediaStreamSource(micStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 4096;
+        source.connect(analyser);
+
+        isListening = true;
+        btn.innerText = "Ferma Ascolto";
+        btn.classList.add('btn-stop');
+        document.getElementById('statusText').innerText = "ASCOLTO IN CORSO...";
+        document.getElementById('statusText').style.color = "var(--subtext)";
+        
+        detectPitch();
+      } catch (err) {
+        alert("Impossibile accedere al microfono: " + err.message);
+      }
+    }
+
+    function detectPitch() {
+      if (!isListening) return;
+
+      const buffer = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buffer);
+      const pitch = autoCorrelate(buffer, audioCtx.sampleRate);
+
+      if (pitch !== -1) {
+        const midiNum = 12 * (Math.log2(pitch / A4)) + 69;
+        const roundedMidi = Math.round(midiNum);
+        
+        const targetFreq = A4 * Math.pow(2, (roundedMidi - 69) / 12);
+        const cents = Math.floor(1200 * Math.log2(pitch / targetFreq));
+
+        const noteIndex = (roundedMidi % 12 + 12) % 12;
+        const octave = Math.floor(roundedMidi / 12) - 1;
+        const noteName = `${noteNamesITA[noteIndex]}${octave}`;
+
+        const closestNaturalNote = getClosestNaturalNote(midiNum);
+
+        document.getElementById('noteDisplay').innerText = noteName;
+        document.getElementById('hzDisplay').innerText = `${pitch.toFixed(1)} Hz`;
+        document.getElementById('naturalDisplay').innerHTML = `Nota naturale più vicina: <span>${closestNaturalNote}</span>`;
+
+        updateNeedleAndStatus(cents);
+      }
+
+      requestAnimationFrame(detectPitch);
+    }
+
+    function getClosestNaturalNote(midiNum) {
+      let minDiff = Infinity;
+      let bestNatName = "";
+
+      const currentOctave = Math.floor(midiNum / 12) - 1;
+
+      for (let oct = currentOctave - 1; oct <= currentOctave + 1; oct++) {
+        for (let pc of naturalMidiClasses) {
+          let natMidi = (oct + 1) * 12 + pc;
+          let diff = Math.abs(midiNum - natMidi);
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestNatName = `${noteNamesITA[pc]}${oct}`;
+          }
+        }
+      }
+      return bestNatName;
+    }
+
+    function updateNeedleAndStatus(cents) {
+      const needle = document.getElementById('needle');
+      const status = document.getElementById('statusText');
+
+      const clampedCents = Math.max(-50, Math.min(50, cents));
+      const percentage = 50 + (clampedCents);
+      needle.style.left = `${percentage}%`;
+
+      if (Math.abs(cents) <= 4) {
+        status.innerText = "INTONATO";
+        status.style.color = "var(--accent)";
+        needle.style.background = "var(--accent)";
+      } else if (cents < -4) {
+        status.innerText = `CALANTE (${cents}c)`;
+        status.style.color = "var(--accent-warn)";
+        needle.style.background = "var(--accent-warn)";
+      } else {
+        status.innerText = `CRESCENTE (+${cents}c)`;
+        status.style.color = "var(--accent-warn)";
+        needle.style.background = "var(--accent-warn)";
+      }
+    }
+
+    function resetDisplay() {
+      document.getElementById('noteDisplay').innerText = "--";
+      document.getElementById('hzDisplay').innerText = "0.0 Hz";
+      document.getElementById('naturalDisplay').innerHTML = "Nota naturale più vicina: <span>--</span>";
+      document.getElementById('needle').style.left = "50%";
+      document.getElementById('needle').style.background = "#fff";
+      document.getElementById('statusText').innerText = "Inattivo";
+      document.getElementById('statusText').style.color = "var(--subtext)";
+    }
+
+    // Esecutore Note MIDI ampliato con le corde del Violino
+    async function playToneNote(noteFull) {
+      const noteMap = {
+        'MI2': { note: 'MI', oct: 2 },
+        'LA2': { note: 'LA', oct: 2 },
+        'RE3': { note: 'RE', oct: 3 },
+        'SOL3': { note: 'SOL', oct: 3 },
+        'SI3': { note: 'SI', oct: 3 },
+        'MI4': { note: 'MI', oct: 4 },
+        'RE4': { note: 'RE', oct: 4 },
+        'LA4': { note: 'LA', oct: 4 },
+        'MI5': { note: 'MI', oct: 5 }
+      };
+
+      const info = noteMap[noteFull];
+      if (info) playFrequency(calculateNoteFreq(info.note, info.oct));
+    }
+
+    function playSelectedTone() {
+      const note = document.getElementById('noteSelect').value;
+      const oct = parseInt(document.getElementById('octaveSelect').value);
+      playFrequency(calculateNoteFreq(note, oct));
+    }
+
+    function calculateNoteFreq(noteName, octave) {
+      const pc = noteNamesITA.indexOf(noteName);
+      const midiNum = (octave + 1) * 12 + pc;
+      return A4 * Math.pow(2, (midiNum - 69) / 12);
+    }
+
+    async function playFrequency(freq) {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      if (activeOscillator) {
+        activeGainNode.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+        setTimeout(() => {
+          try { activeOscillator.stop(); } catch(e){}
+        }, 60);
+      }
+
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+      gain.gain.setValueAtTime(0.01, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 2.0);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 2.0);
+
+      activeOscillator = osc;
+      activeGainNode = gain;
+    }
+
+    function autoCorrelate(buf, sampleRate) {
+      let SIZE = buf.length, rms = 0;
+      for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+      rms = Math.sqrt(rms / SIZE);
+      if (rms < 0.008) return -1;
+
+      let minPeriod = Math.floor(sampleRate / 1100);
+      let maxPeriod = Math.floor(sampleRate / 60);
+
+      let c = new Array(maxPeriod + 1).fill(0);
+      for (let i = minPeriod; i <= maxPeriod; i++) {
+        for (let j = 0; j < SIZE - i; j++) {
+          c[i] += buf[j] * buf[j + i];
+        }
+      }
+
+      let maxval = -1, maxpos = -1;
+      for (let i = minPeriod; i <= maxPeriod; i++) {
+        if (c[i] > maxval) {
+          maxval = c[i];
+          maxpos = i;
+        }
+      }
+
+      if (maxpos === -1 || maxval / c[0] < 0.25) return -1;
+
+      let T0 = maxpos;
+      let x1 = c[T0 - 1] || c[T0], x2 = c[T0], x3 = c[T0 + 1] || c[T0];
+      let a = (x1 + x3 - 2 * x2) / 2, b = (x3 - x1) / 2;
+      if (a) T0 = T0 - b / (2 * a);
+
+      return sampleRate / T0;
+    }
+  </script>
+</body>
+</html>
