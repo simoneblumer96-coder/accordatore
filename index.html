@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accordatore Minimale & Esecutore Note</title>
+  <link rel="manifest" href="manifest.json">
   <style>
     :root {
       --bg-color: #121214;
@@ -39,20 +40,21 @@
     .gauge-container { width: 100%; position: relative; margin: 0.8rem 0; }
     .gauge-bar { width: 100%; height: 12px; background: #2a2a32; border-radius: 6px; position: relative; overflow: hidden; }
     .gauge-center-mark { position: absolute; left: 50%; top: 0; bottom: 0; width: 4px; background: var(--accent); transform: translateX(-50%); z-index: 2; }
-    .gauge-needle { position: absolute; top: 0; bottom: 0; width: 6px; background: #ffffff; border-radius: 3px; transform: translateX(-50%); transition: left 0.1s ease-out, background 0.1s; z-index: 3; }
+    .gauge-needle { position: absolute; top: 0; bottom: 0; width: 6px; background: #ffffff; border-radius: 3px; transform: translateX(-50%); transition: left 0.12s ease-out, background 0.12s; z-index: 3; }
     .gauge-labels { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--subtext); margin-top: 0.4rem; }
 
     .status-text { font-size: 1rem; font-weight: bold; margin-top: 0.4rem; text-transform: uppercase; letter-spacing: 1px; min-height: 1.4rem; }
 
     .btn { width: 100%; padding: 0.85rem; border-radius: 12px; border: none; background: var(--accent); color: #000; font-weight: bold; font-size: 1rem; cursor: pointer; touch-action: manipulation; }
+    .btn:active { transform: scale(0.98); }
     .btn-stop { background: var(--accent-off) !important; color: #fff; }
 
     /* Esecutore Note MIDI */
     .section-subtitle { font-size: 0.8rem; color: var(--subtext); width: 100%; margin-top: 0.6rem; margin-bottom: 0.4rem; font-weight: 600; }
     .midi-grid-6 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; width: 100%; }
     .midi-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; width: 100%; }
-    .note-btn { background: #2a2a32; border: 1px solid #3a3a44; color: var(--text); padding: 0.65rem 0.2rem; border-radius: 10px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-align: center; }
-    .note-btn.active { background: var(--accent) !important; color: #000 !important; }
+    .note-btn { background: #2a2a32; border: 1px solid #3a3a44; color: var(--text); padding: 0.7rem 0.2rem; border-radius: 10px; font-weight: bold; font-size: 0.85rem; cursor: pointer; text-align: center; touch-action: manipulation; }
+    .note-btn:active { background: var(--accent); color: #000; }
     
     .custom-tone { display: flex; gap: 0.5rem; width: 100%; margin-top: 1rem; }
     .custom-tone select { flex: 1; background: #2a2a32; border: 1px solid #444; color: #fff; padding: 0.6rem; border-radius: 8px; font-weight: bold; }
@@ -153,10 +155,21 @@
     let isListening = false;
     let activeOscillator = null;
     let activeGainNode = null;
+    let lastPitch = -1;
 
     let A4 = 440;
     const noteNamesITA = ["DO", "DO#", "RE", "RE#", "MI", "FA", "FA#", "SOL", "SOL#", "LA", "LA#", "SI"];
     const naturalMidiClasses = [0, 2, 4, 5, 7, 9, 11];
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
 
     function updateA4() {
       const val = parseFloat(document.getElementById('a4Input').value);
@@ -177,17 +190,29 @@
       }
 
       try {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        const ctx = getAudioContext();
 
         micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         });
 
-        const source = audioCtx.createMediaStreamSource(micStream);
-        analyser = audioCtx.createAnalyser();
+        const source = ctx.createMediaStreamSource(micStream);
+        
+        // Filtri audio per stabilizzare la rilevazione ed eliminare fruscii
+        const hpFilter = ctx.createBiquadFilter();
+        hpFilter.type = "highpass";
+        hpFilter.frequency.value = 50; // Taglia rumori sordi sotto i 50Hz
+
+        const lpFilter = ctx.createBiquadFilter();
+        lpFilter.type = "lowpass";
+        lpFilter.frequency.value = 1200; // Taglia fischi alti sopra 1200Hz
+
+        analyser = ctx.createAnalyser();
         analyser.fftSize = 4096;
-        source.connect(analyser);
+
+        source.connect(hpFilter);
+        hpFilter.connect(lpFilter);
+        lpFilter.connect(analyser);
 
         isListening = true;
         btn.innerText = "Ferma Ascolto";
@@ -206,9 +231,17 @@
 
       const buffer = new Float32Array(analyser.fftSize);
       analyser.getFloatTimeDomainData(buffer);
-      const pitch = autoCorrelate(buffer, audioCtx.sampleRate);
+      const rawPitch = autoCorrelate(buffer, audioCtx.sampleRate);
 
-      if (pitch !== -1) {
+      if (rawPitch !== -1) {
+        // Algoritmo di Smoothing: evita che l'ago balzi se la frequenza varia di poco
+        if (lastPitch === -1 || Math.abs(rawPitch - lastPitch) > 40) {
+          lastPitch = rawPitch;
+        } else {
+          lastPitch = lastPitch + 0.25 * (rawPitch - lastPitch);
+        }
+
+        const pitch = lastPitch;
         const midiNum = 12 * (Math.log2(pitch / A4)) + 69;
         const roundedMidi = Math.round(midiNum);
         
@@ -226,6 +259,8 @@
         document.getElementById('naturalDisplay').innerHTML = `Nota naturale più vicina: <span>${closestNaturalNote}</span>`;
 
         updateNeedleAndStatus(cents);
+      } else {
+        lastPitch = -1;
       }
 
       requestAnimationFrame(detectPitch);
@@ -255,7 +290,7 @@
       const status = document.getElementById('statusText');
 
       const clampedCents = Math.max(-50, Math.min(50, cents));
-      const percentage = 50 + (clampedCents);
+      const percentage = 50 + clampedCents;
       needle.style.left = `${percentage}%`;
 
       if (Math.abs(cents) <= 4) {
@@ -281,10 +316,11 @@
       document.getElementById('needle').style.background = "#fff";
       document.getElementById('statusText').innerText = "Inattivo";
       document.getElementById('statusText').style.color = "var(--subtext)";
+      lastPitch = -1;
     }
 
-    // Esecutore Note MIDI ampliato con le corde del Violino
-    async function playToneNote(noteFull) {
+    // Esecutore Note MIDI (Compatibile 100% con Safari/Chrome Mobile)
+    function playToneNote(noteFull) {
       const noteMap = {
         'MI2': { note: 'MI', oct: 2 },
         'LA2': { note: 'LA', oct: 2 },
@@ -313,32 +349,35 @@
       return A4 * Math.pow(2, (midiNum - 69) / 12);
     }
 
-    async function playFrequency(freq) {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
+    function playFrequency(freq) {
+      const ctx = getAudioContext();
 
+      // Interrompe eventuale nota già in esecuzione
       if (activeOscillator) {
-        activeGainNode.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
-        setTimeout(() => {
-          try { activeOscillator.stop(); } catch(e){}
-        }, 60);
+        try {
+          activeGainNode.gain.cancelScheduledValues(ctx.currentTime);
+          activeGainNode.gain.setValueAtTime(activeGainNode.gain.value, ctx.currentTime);
+          activeGainNode.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+          activeOscillator.stop(ctx.currentTime + 0.05);
+        } catch(e){}
       }
 
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
 
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
 
-      gain.gain.setValueAtTime(0.01, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 2.0);
+      const now = ctx.currentTime;
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.35, now + 0.04); // Attacco morbido
+      gain.gain.linearRampToValueAtTime(0.001, now + 1.8); // Rilascio
 
       osc.connect(gain);
-      gain.connect(audioCtx.destination);
+      gain.connect(ctx.destination);
 
-      osc.start();
-      osc.stop(audioCtx.currentTime + 2.0);
+      osc.start(now);
+      osc.stop(now + 1.8);
 
       activeOscillator = osc;
       activeGainNode = gain;
@@ -348,10 +387,10 @@
       let SIZE = buf.length, rms = 0;
       for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
       rms = Math.sqrt(rms / SIZE);
-      if (rms < 0.008) return -1;
+      if (rms < 0.015) return -1; // Soglia rumore di fondo aumentata
 
-      let minPeriod = Math.floor(sampleRate / 1100);
-      let maxPeriod = Math.floor(sampleRate / 60);
+      let minPeriod = Math.floor(sampleRate / 1200);
+      let maxPeriod = Math.floor(sampleRate / 55);
 
       let c = new Array(maxPeriod + 1).fill(0);
       for (let i = minPeriod; i <= maxPeriod; i++) {
@@ -368,7 +407,7 @@
         }
       }
 
-      if (maxpos === -1 || maxval / c[0] < 0.25) return -1;
+      if (maxpos === -1 || maxval / c[0] < 0.3) return -1;
 
       let T0 = maxpos;
       let x1 = c[T0 - 1] || c[T0], x2 = c[T0], x3 = c[T0 + 1] || c[T0];
